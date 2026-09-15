@@ -1,10 +1,17 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Once, InjectDiscordClient, On } from '@discord-nestjs/core';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import {
+  Once,
+  InjectDiscordClient,
+  On,
+  DiscordCommandProvider,
+} from '@discord-nestjs/core';
+import {
+  ApplicationCommandData,
   ApplicationIntegrationType,
   Client,
   Guild,
   GuildMember,
+  InteractionContextType,
   Message,
   TextChannel,
   Webhook,
@@ -13,7 +20,7 @@ import { BondageService } from 'src/bondage/bondage.service';
 import { HOME_GUILD_ID, isHomeGuild } from 'src/helper/home-guild';
 
 @Injectable()
-export class BotGateway {
+export class BotGateway implements OnModuleInit {
   private readonly logger = new Logger(BotGateway.name);
   private readonly webhookCache = new Map<string, Webhook>();
 
@@ -21,12 +28,24 @@ export class BotGateway {
     @InjectDiscordClient()
     private readonly client: Client,
     private bondageService: BondageService,
+    private discordCommandProvider: DiscordCommandProvider,
   ) {}
+
+  onModuleInit(): void {
+    this.restrictCommandPayloadsToGuild();
+  }
 
   @Once('ready')
   async onReady() {
     this.logger.log(`Bot ${this.client.user?.tag} was started!`);
+    this.restrictCommandPayloadsToGuild();
     await this.restrictToHomeGuild();
+    void this.normalizeSlashCommandsAfterRegister().catch((error) => {
+      this.logger.error(
+        'Failed to normalize slash commands',
+        error instanceof Error ? error.stack : String(error),
+      );
+    });
   }
 
   @On('guildCreate')
@@ -220,6 +239,84 @@ export class BotGateway {
     await this.leaveForeignGuilds();
   }
 
+  private restrictCommandPayloadsToGuild(): void {
+    for (const entry of this.discordCommandProvider.getAllCommands().values()) {
+      entry.commandData.integrationTypes = [
+        ApplicationIntegrationType.GuildInstall,
+      ];
+      entry.commandData.contexts = [InteractionContextType.Guild];
+      entry.commandData.dmPermission = false;
+    }
+  }
+
+  private async normalizeSlashCommandsAfterRegister(): Promise<void> {
+    const timeoutMs = 15_000;
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < timeoutMs) {
+      await sleep(1_500);
+      const guild = this.client.guilds.cache.get(HOME_GUILD_ID);
+      if (!guild) continue;
+
+      const commands = await guild.commands.fetch();
+      if (commands.size === 0) continue;
+
+      this.restrictCommandPayloadsToGuild();
+      await this.rewriteHomeGuildCommands();
+      await sleep(2_500);
+      await this.rewriteHomeGuildCommands();
+      return;
+    }
+
+    this.logger.warn(
+      'Timed out waiting for slash commands to register before normalizing',
+    );
+    await this.rewriteHomeGuildCommands();
+  }
+
+  private async rewriteHomeGuildCommands(): Promise<void> {
+    try {
+      await this.clearGlobalCommands();
+
+      const guild =
+        this.client.guilds.cache.get(HOME_GUILD_ID) ??
+        (await this.client.guilds.fetch(HOME_GUILD_ID));
+      const existing = await guild.commands.fetch();
+      const unique = new Map<string, ApplicationCommandData>();
+
+      for (const command of existing.values()) {
+        if (unique.has(command.name)) continue;
+
+        unique.set(command.name, {
+          name: command.name,
+          description: command.description,
+          type: command.type,
+          options: [...command.options],
+          defaultMemberPermissions: command.defaultMemberPermissions,
+          dmPermission: false,
+          integrationTypes: [ApplicationIntegrationType.GuildInstall],
+          contexts: [InteractionContextType.Guild],
+        } as ApplicationCommandData);
+      }
+
+      const payload = [...unique.values()];
+      if (payload.length === 0) {
+        this.logger.warn('No home-guild slash commands found to rewrite');
+        return;
+      }
+
+      await guild.commands.set(payload);
+      this.logger.log(
+        `Normalized ${payload.length} home-guild slash command(s); removed duplicates`,
+      );
+    } catch (error) {
+      this.logger.error(
+        'Failed to rewrite home-guild slash commands',
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+  }
+
   private async lockApplicationToHomeGuild(): Promise<void> {
     try {
       const application = await this.client.application?.fetch();
@@ -284,7 +381,21 @@ export class BotGateway {
 
   private async clearGlobalCommands(): Promise<void> {
     try {
-      await this.client.application?.commands.set([]);
+      const application = this.client.application;
+
+      if (!application) {
+        this.logger.error('Could not fetch the Discord application');
+        return;
+      }
+
+      const existing = await application.commands.fetch();
+      if (existing.size > 0) {
+        this.logger.log(
+          `Clearing ${existing.size} global slash command(s): ${[...existing.values()].map((command) => command.name).join(', ')}`,
+        );
+      }
+
+      await application.commands.set([]);
       this.logger.log(
         'Cleared global slash commands so they only exist in the home server',
       );
@@ -443,6 +554,10 @@ function garbleText(message: Message) {
       return Math.random() > 0.9 ? 'm' : char;
     })
     .join('')}\n\n||*${message.content}*||`;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 const MIN_ACCOUNT_AGE_DAYS = 30;

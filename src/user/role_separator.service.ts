@@ -1,12 +1,24 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { Client, Guild, GuildMember } from 'discord.js';
+import { InjectRepository } from '@nestjs/typeorm';
 import { InjectDiscordClient } from '@discord-nestjs/core';
+import { Client, Guild, GuildMember } from 'discord.js';
+import { Repository } from 'typeorm';
+import { FindomFlag } from './findom-flag.entity';
 
 type RoleGroup = {
   name: string;
   sourceRoleIds: string[];
   separatorRoleId: string;
+};
+
+export type WhitelistResult = {
+  alreadyWhitelisted: boolean;
+  inGuild: boolean;
+  previousRoleIds: string[];
+  restoredRoleIds: string[];
+  skippedRoleIds: string[];
+  removedFindomFlag: boolean;
 };
 
 @Injectable()
@@ -127,7 +139,11 @@ export class RoleSeparatorService {
     },
   ];
 
-  constructor(@InjectDiscordClient() private readonly client: Client) {}
+  constructor(
+    @InjectDiscordClient() private readonly client: Client,
+    @InjectRepository(FindomFlag)
+    private readonly findomFlagRepository: Repository<FindomFlag>,
+  ) {}
 
   @Cron(CronExpression.EVERY_HOUR)
   async handleRoleSeparation(): Promise<void> {
@@ -142,8 +158,10 @@ export class RoleSeparatorService {
 
       await guild.members.fetch();
 
+      const whitelistedIds = await this.getWhitelistedUserIds();
       let updated = 0;
       let flagged = 0;
+      let skippedWhitelist = 0;
 
       for (const member of guild.members.cache.values()) {
         if (member.user.bot) {
@@ -151,6 +169,11 @@ export class RoleSeparatorService {
         }
 
         if (this.hasFindomName(member)) {
+          if (whitelistedIds.has(member.id)) {
+            skippedWhitelist++;
+            continue;
+          }
+
           const restricted = await this.restrictToFindomRole(member);
 
           if (restricted) {
@@ -181,7 +204,7 @@ export class RoleSeparatorService {
       }
 
       this.logger.log(
-        `Role separator sync completed successfully. Updated ${updated} members. Flagged ${flagged} suspected findom accounts.`,
+        `Role separator sync completed successfully. Updated ${updated} members. Flagged ${flagged} suspected findom accounts. Skipped ${skippedWhitelist} whitelisted accounts.`,
       );
     } catch (error) {
       this.logger.error(
@@ -259,6 +282,18 @@ export class RoleSeparatorService {
       return false;
     }
 
+    const previousRoleIds = extraRoles.map((role) => role.id);
+
+    try {
+      await this.persistPreviousRoles(member.id, previousRoleIds);
+    } catch (error) {
+      this.logger.error(
+        `Failed to save previous roles for ${member.user.tag} (${member.id}); skipping restriction so roles are not lost`,
+        error instanceof Error ? error.stack : String(error),
+      );
+      return false;
+    }
+
     this.logger.warn(
       `Restricting suspected findom account ${member.user.tag} (${member.id}) to role ${this.findomFlagRoleId}`,
     );
@@ -309,6 +344,228 @@ export class RoleSeparatorService {
     }
 
     return changed;
+  }
+
+  async whitelistFlaggedUser(
+    userId: string,
+    guild: Guild,
+  ): Promise<WhitelistResult> {
+    const existing = await this.findomFlagRepository.findOne({
+      where: { userId },
+    });
+    const previousRoleIds = existing?.previousRoleIds ?? [];
+    const alreadyWhitelisted = existing?.whitelisted === true;
+
+    if (existing) {
+      existing.whitelisted = true;
+      if (!existing.previousRoleIds) {
+        existing.previousRoleIds = [];
+      }
+      await this.findomFlagRepository.save(existing);
+    } else {
+      await this.findomFlagRepository.save(
+        this.findomFlagRepository.create({
+          userId,
+          previousRoleIds: [],
+          whitelisted: true,
+        }),
+      );
+    }
+
+    let member: GuildMember | null = null;
+
+    try {
+      member = await guild.members.fetch(userId);
+    } catch {
+      member = null;
+    }
+
+    if (!member) {
+      return {
+        alreadyWhitelisted,
+        inGuild: false,
+        previousRoleIds,
+        restoredRoleIds: [],
+        skippedRoleIds: previousRoleIds,
+        removedFindomFlag: false,
+      };
+    }
+
+    const restored = await this.restorePreviousRoles(member, previousRoleIds);
+
+    return {
+      alreadyWhitelisted,
+      inGuild: true,
+      previousRoleIds,
+      ...restored,
+    };
+  }
+
+  private async getWhitelistedUserIds(): Promise<Set<string>> {
+    const rows = await this.findomFlagRepository.find({
+      where: { whitelisted: true },
+      select: ['userId'],
+    });
+
+    return new Set(
+      rows
+        .map((row) => row.userId)
+        .filter((userId): userId is string => Boolean(userId)),
+    );
+  }
+
+  private async persistPreviousRoles(
+    userId: string,
+    previousRoleIds: string[],
+  ): Promise<void> {
+    const existing = await this.findomFlagRepository.findOne({
+      where: { userId },
+    });
+
+    if (existing) {
+      if (
+        (!existing.previousRoleIds || existing.previousRoleIds.length === 0) &&
+        previousRoleIds.length > 0
+      ) {
+        existing.previousRoleIds = previousRoleIds;
+        await this.findomFlagRepository.save(existing);
+      }
+      return;
+    }
+
+    await this.findomFlagRepository.save(
+      this.findomFlagRepository.create({
+        userId,
+        previousRoleIds,
+        whitelisted: false,
+      }),
+    );
+  }
+
+  private async restorePreviousRoles(
+    member: GuildMember,
+    previousRoleIds: string[],
+  ): Promise<{
+    restoredRoleIds: string[];
+    skippedRoleIds: string[];
+    removedFindomFlag: boolean;
+  }> {
+    const reason = 'Whitelisted false-flagged findom account';
+
+    if (previousRoleIds.length === 0) {
+      const removedFindomFlag = await this.removeFindomFlag(member, reason);
+      return {
+        restoredRoleIds: [],
+        skippedRoleIds: [],
+        removedFindomFlag,
+      };
+    }
+
+    const { restorableIds, skippedRoleIds } = this.classifyRolesToRestore(
+      member,
+      previousRoleIds,
+    );
+
+    if (!member.manageable) {
+      this.logger.warn(
+        `Cannot restore roles for ${member.user.tag} (${member.id}); member is not manageable`,
+      );
+      return {
+        restoredRoleIds: [],
+        skippedRoleIds: restorableIds.concat(skippedRoleIds),
+        removedFindomFlag: false,
+      };
+    }
+
+    try {
+      await member.roles.set(restorableIds, reason);
+      return {
+        restoredRoleIds: restorableIds,
+        skippedRoleIds,
+        removedFindomFlag: true,
+      };
+    } catch (error) {
+      this.logger.warn(
+        `roles.set failed while restoring ${member.user.tag}, falling back to per-role update: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
+    const removedFindomFlag = await this.removeFindomFlag(member, reason);
+    const restoredRoleIds: string[] = [];
+    const failedRoleIds = [...skippedRoleIds];
+
+    for (const roleId of restorableIds) {
+      try {
+        await member.roles.add(roleId, reason);
+        restoredRoleIds.push(roleId);
+      } catch (error) {
+        this.logger.warn(
+          `Failed to restore role ${roleId} for ${member.user.tag}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        failedRoleIds.push(roleId);
+      }
+    }
+
+    return {
+      restoredRoleIds,
+      skippedRoleIds: failedRoleIds,
+      removedFindomFlag,
+    };
+  }
+
+  private classifyRolesToRestore(
+    member: GuildMember,
+    previousRoleIds: string[],
+  ): { restorableIds: string[]; skippedRoleIds: string[] } {
+    const botMember = member.guild.members.me;
+    const restorableIds: string[] = [];
+    const skippedRoleIds: string[] = [];
+
+    for (const roleId of previousRoleIds) {
+      if (roleId === this.findomFlagRoleId || roleId === member.guild.id) {
+        continue;
+      }
+
+      const role = member.guild.roles.cache.get(roleId);
+
+      if (
+        !role ||
+        role.managed ||
+        (botMember && role.position >= botMember.roles.highest.position)
+      ) {
+        skippedRoleIds.push(roleId);
+        continue;
+      }
+
+      restorableIds.push(roleId);
+    }
+
+    return { restorableIds, skippedRoleIds };
+  }
+
+  private async removeFindomFlag(
+    member: GuildMember,
+    reason: string,
+  ): Promise<boolean> {
+    if (!member.roles.cache.has(this.findomFlagRoleId)) {
+      return true;
+    }
+
+    try {
+      await member.roles.remove(this.findomFlagRoleId, reason);
+      return true;
+    } catch (error) {
+      this.logger.warn(
+        `Failed to remove findom flag role from ${member.user.tag}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return false;
+    }
   }
 
   private async syncMemberRoles(member: GuildMember): Promise<boolean> {

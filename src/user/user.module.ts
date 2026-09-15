@@ -11,10 +11,12 @@ import { RoleSeparatorService } from './role_separator.service';
 import { SharedDiscordModule } from 'src/helper/shared-discord.module';
 import { BondageModule } from 'src/bondage/bondage.module';
 import { FriendsCommand } from './friends.command';
+import { FindomFlag } from './findom-flag.entity';
+import { WhitelistCommand } from './whitelist.command';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([UserSettings, ActiveSession]),
+    TypeOrmModule.forFeature([UserSettings, ActiveSession, FindomFlag]),
     SharedDiscordModule,
     BondageModule,
   ],
@@ -23,6 +25,7 @@ import { FriendsCommand } from './friends.command';
     UserSettingsCommand,
     UserProfileCommand,
     FriendsCommand,
+    WhitelistCommand,
     CleanupService,
     RoleSeparatorService,
     ReflectMetadataProvider,
