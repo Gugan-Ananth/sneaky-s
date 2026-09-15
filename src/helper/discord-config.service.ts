@@ -4,6 +4,7 @@ import {
   DiscordOptionsFactory,
 } from '@discord-nestjs/core';
 import { GatewayIntentBits } from 'discord.js';
+import { Subject } from 'rxjs';
 import { HOME_GUILD_ID } from './home-guild';
 
 @Injectable()
@@ -22,7 +23,10 @@ export class DiscordConfigService implements DiscordOptionsFactory {
       registerCommandOptions: [
         {
           forGuild: HOME_GUILD_ID,
-          removeCommandsBefore: true,
+          // discord-nestjs also hooks `ready` and would race our lockdown,
+          // registering leftover global copies. A trigger that never emits
+          // disables that so BotGateway registers the guild set once.
+          trigger: () => new Subject(),
         },
       ],
     };

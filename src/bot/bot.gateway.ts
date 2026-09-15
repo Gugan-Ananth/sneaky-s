@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import {
   Once,
   InjectDiscordClient,
@@ -20,7 +20,7 @@ import { BondageService } from 'src/bondage/bondage.service';
 import { HOME_GUILD_ID, isHomeGuild } from 'src/helper/home-guild';
 
 @Injectable()
-export class BotGateway implements OnModuleInit {
+export class BotGateway {
   private readonly logger = new Logger(BotGateway.name);
   private readonly webhookCache = new Map<string, Webhook>();
 
@@ -31,21 +31,14 @@ export class BotGateway implements OnModuleInit {
     private discordCommandProvider: DiscordCommandProvider,
   ) {}
 
-  onModuleInit(): void {
-    this.restrictCommandPayloadsToGuild();
-  }
-
   @Once('ready')
   async onReady() {
     this.logger.log(`Bot ${this.client.user?.tag} was started!`);
-    this.restrictCommandPayloadsToGuild();
     await this.restrictToHomeGuild();
-    void this.normalizeSlashCommandsAfterRegister().catch((error) => {
-      this.logger.error(
-        'Failed to normalize slash commands',
-        error instanceof Error ? error.stack : String(error),
-      );
-    });
+    await this.registerHomeGuildCommands();
+    setTimeout(() => {
+      void this.clearGlobalCommands();
+    }, 10_000);
   }
 
   @On('guildCreate')
@@ -235,86 +228,82 @@ export class BotGateway implements OnModuleInit {
 
   private async restrictToHomeGuild(): Promise<void> {
     await this.lockApplicationToHomeGuild();
-    await this.clearGlobalCommands();
     await this.leaveForeignGuilds();
   }
 
-  private restrictCommandPayloadsToGuild(): void {
-    for (const entry of this.discordCommandProvider.getAllCommands().values()) {
-      entry.commandData.integrationTypes = [
-        ApplicationIntegrationType.GuildInstall,
-      ];
-      entry.commandData.contexts = [InteractionContextType.Guild];
-      entry.commandData.dmPermission = false;
-    }
-  }
-
-  private async normalizeSlashCommandsAfterRegister(): Promise<void> {
-    const timeoutMs = 15_000;
-    const startedAt = Date.now();
-
-    while (Date.now() - startedAt < timeoutMs) {
-      await sleep(1_500);
-      const guild = this.client.guilds.cache.get(HOME_GUILD_ID);
-      if (!guild) continue;
-
-      const commands = await guild.commands.fetch();
-      if (commands.size === 0) continue;
-
-      this.restrictCommandPayloadsToGuild();
-      await this.rewriteHomeGuildCommands();
-      await sleep(2_500);
-      await this.rewriteHomeGuildCommands();
-      return;
-    }
-
-    this.logger.warn(
-      'Timed out waiting for slash commands to register before normalizing',
-    );
-    await this.rewriteHomeGuildCommands();
-  }
-
-  private async rewriteHomeGuildCommands(): Promise<void> {
+  private async registerHomeGuildCommands(): Promise<void> {
     try {
-      await this.clearGlobalCommands();
+      let payload = this.buildGuildCommandPayload();
 
-      const guild =
-        this.client.guilds.cache.get(HOME_GUILD_ID) ??
-        (await this.client.guilds.fetch(HOME_GUILD_ID));
-      const existing = await guild.commands.fetch();
-      const unique = new Map<string, ApplicationCommandData>();
-
-      for (const command of existing.values()) {
-        if (unique.has(command.name)) continue;
-
-        unique.set(command.name, {
-          name: command.name,
-          description: command.description,
-          type: command.type,
-          options: [...command.options],
-          defaultMemberPermissions: command.defaultMemberPermissions,
-          dmPermission: false,
-          integrationTypes: [ApplicationIntegrationType.GuildInstall],
-          contexts: [InteractionContextType.Guild],
-        } as ApplicationCommandData);
+      for (let attempt = 0; attempt < 10 && payload.length === 0; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        payload = this.buildGuildCommandPayload();
       }
 
-      const payload = [...unique.values()];
       if (payload.length === 0) {
-        this.logger.warn('No home-guild slash commands found to rewrite');
+        this.logger.error('No slash commands discovered to register');
+        await this.clearGlobalCommands();
         return;
       }
 
-      await guild.commands.set(payload);
+      await this.clearGlobalCommands();
+
+      const application = this.client.application;
+      if (!application) {
+        this.logger.error('Could not fetch the Discord application');
+        return;
+      }
+
+      await application.commands.set(payload, HOME_GUILD_ID);
+
+      const [globalCommands, guildCommands] = await Promise.all([
+        application.commands.fetch(),
+        application.commands.fetch({ guildId: HOME_GUILD_ID }),
+      ]);
+
       this.logger.log(
-        `Normalized ${payload.length} home-guild slash command(s); removed duplicates`,
+        `Registered ${guildCommands.size} home-guild slash command(s): ${this.formatCommandNames(guildCommands)}`,
       );
+      this.logger.log(
+        `Global slash commands remaining: ${globalCommands.size}${
+          globalCommands.size > 0
+            ? ` (${this.formatCommandNames(globalCommands)})`
+            : ''
+        }`,
+      );
+
+      if (globalCommands.size > 0) {
+        await this.clearGlobalCommands();
+      }
     } catch (error) {
       this.logger.error(
-        'Failed to rewrite home-guild slash commands',
+        'Failed to register home-guild slash commands',
         error instanceof Error ? error.stack : String(error),
       );
     }
+  }
+
+  private buildGuildCommandPayload(): ApplicationCommandData[] {
+    const unique = new Map<string, ApplicationCommandData>();
+
+    for (const { commandData } of this.discordCommandProvider
+      .getAllCommands()
+      .values()) {
+      unique.set(commandData.name, {
+        ...commandData,
+        integrationTypes: [ApplicationIntegrationType.GuildInstall],
+        contexts: [InteractionContextType.Guild],
+        dmPermission: false,
+      });
+    }
+
+    return [...unique.values()];
+  }
+
+  private formatCommandNames(commands: {
+    values(): IterableIterator<{ name: string }>;
+  }): string {
+    return [...commands.values()].map((command) => command.name).join(', ');
   }
 
   private async lockApplicationToHomeGuild(): Promise<void> {
@@ -554,10 +543,6 @@ function garbleText(message: Message) {
       return Math.random() > 0.9 ? 'm' : char;
     })
     .join('')}\n\n||*${message.content}*||`;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 const MIN_ACCOUNT_AGE_DAYS = 30;
