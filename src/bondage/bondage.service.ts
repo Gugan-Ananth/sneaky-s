@@ -1,12 +1,14 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ActiveSession } from './active-session.entity';
 import { Repository } from 'typeorm';
 import { UserSettings } from 'src/user/user-settings.entity';
 import { scenarios } from './scenarios';
-import { Client, GuildMember } from 'discord.js';
+import { Client, DiscordAPIError, Guild, GuildMember } from 'discord.js';
 import { BondageScenario } from './bondage-scenarios';
 import { InjectDiscordClient } from '@discord-nestjs/core';
+
+const CAGE_ROLE_ID = '1497994703050903735';
 
 type StartSessionOptions = {
   bondageDescription?: string;
@@ -16,6 +18,8 @@ type StartSessionOptions = {
 
 @Injectable()
 export class BondageService {
+  private readonly logger = new Logger(BondageService.name);
+
   constructor(
     @InjectRepository(ActiveSession)
     private readonly activeSessionRepository: Repository<ActiveSession>,
@@ -79,40 +83,141 @@ export class BondageService {
 
   async handleSafeword(
     userId: string,
-    channelId?: string,
+    _channelId?: string,
     member?: GuildMember,
   ): Promise<void> {
     const session = await this.activeSessionRepository.findOne({
       where: { userId },
     });
 
-    if (!session || !channelId) throw new Error('Session / Channel not found');
-    await this.restoreRoles(member, session.originalRoles);
-    await this.activeSessionRepository.delete({ userId });
+    if (!session) throw new Error('Session / Channel not found');
+    await this.endSession(session, member);
+  }
 
-    const channel = await this.client.channels.fetch(channelId);
+  async endSession(
+    session: ActiveSession,
+    member?: GuildMember,
+  ): Promise<void> {
+    try {
+      const resolvedMember = await this.resolveMember(session, member);
+      if (resolvedMember) {
+        await this.restoreRoles(resolvedMember, session.originalRoles);
+      } else {
+        this.logger.warn(
+          `Skipping role restore for ${session.userId}; member is no longer in the guild`,
+        );
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Role restore failed for ${session.userId}: ${this.errorMessage(error)}`,
+      );
+    }
 
-    if (channel?.isTextBased()) {
-      await channel.delete('Session ended');
+    if (session.channelId) {
+      try {
+        const channel = await this.client.channels.fetch(session.channelId);
+        if (channel?.isTextBased() && !channel.isDMBased()) {
+          await channel.delete('Session ended');
+        }
+      } catch (error) {
+        if (!this.isUnknownResource(error)) {
+          this.logger.warn(
+            `Failed to delete cage channel ${session.channelId}: ${this.errorMessage(error)}`,
+          );
+        }
+      }
+    }
+
+    if (session.userId) {
+      await this.activeSessionRepository.delete({ userId: session.userId });
+    }
+  }
+
+  private async resolveMember(
+    session: ActiveSession,
+    member?: GuildMember,
+  ): Promise<GuildMember | null> {
+    if (member) {
+      return member;
+    }
+
+    if (!session.guildId || !session.userId) {
+      return null;
+    }
+
+    let guild: Guild;
+    try {
+      guild = await this.client.guilds.fetch(session.guildId);
+    } catch (error) {
+      if (!this.isUnknownResource(error)) {
+        this.logger.warn(
+          `Failed to fetch guild ${session.guildId}: ${this.errorMessage(error)}`,
+        );
+      }
+      return null;
+    }
+
+    try {
+      return await guild.members.fetch(session.userId);
+    } catch (error) {
+      if (!this.isUnknownResource(error)) {
+        this.logger.warn(
+          `Failed to fetch member ${session.userId}: ${this.errorMessage(error)}`,
+        );
+      }
+      return null;
     }
   }
 
   private async restoreRoles(
-    member?: GuildMember,
+    member: GuildMember,
     roleIds?: string[],
   ): Promise<void> {
-    try {
-      if (!roleIds) return;
+    await member.guild.roles.fetch().catch(() => null);
 
-      for (const role of roleIds) {
-        if (role === member?.guild.id) continue;
-        await member?.roles.add(role);
+    for (const roleId of roleIds ?? []) {
+      if (roleId === member.guild.id) continue;
+      if (!member.guild.roles.cache.has(roleId)) {
+        this.logger.warn(
+          `Skipping unknown role ${roleId} while releasing ${member.id}`,
+        );
+        continue;
       }
-      await member?.roles.remove('1497994703050903735');
-    } catch (error) {
-      console.error('Error restoring roles:', error);
-      throw new Error('Failed to restore roles');
+
+      try {
+        await member.roles.add(roleId);
+      } catch (error) {
+        this.logger.warn(
+          `Could not restore role ${roleId} for ${member.id}: ${this.errorMessage(error)}`,
+        );
+      }
     }
+
+    if (!member.roles.cache.has(CAGE_ROLE_ID)) {
+      return;
+    }
+
+    try {
+      await member.roles.remove(CAGE_ROLE_ID);
+    } catch (error) {
+      this.logger.warn(
+        `Could not remove cage role from ${member.id}: ${this.errorMessage(error)}`,
+      );
+    }
+  }
+
+  private isUnknownResource(error: unknown): boolean {
+    return (
+      error instanceof DiscordAPIError &&
+      (error.code === 10007 ||
+        error.code === 10011 ||
+        error.code === 10003 ||
+        error.code === 10004)
+    );
+  }
+
+  private errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
   }
 
   async getActiveSession(userId: string): Promise<ActiveSession | null> {
