@@ -5,7 +5,7 @@ export class Migration1789420800000 implements MigrationInterface {
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(
-      `ALTER TABLE "user_settings" ADD "friendIds" text array NOT NULL DEFAULT '{}'`,
+      `ALTER TABLE "user_settings" ADD COLUMN IF NOT EXISTS "friendIds" text array NOT NULL DEFAULT '{}'`,
     );
   }
 

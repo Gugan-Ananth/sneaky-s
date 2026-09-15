@@ -4,9 +4,11 @@ export class Migration1777583884993 implements MigrationInterface {
   name = 'Migration1777583884993';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`ALTER TABLE "user_settings" DROP COLUMN "gag"`);
     await queryRunner.query(
-      `ALTER TABLE "user_settings" DROP COLUMN "blindfold"`,
+      `ALTER TABLE "user_settings" DROP COLUMN IF EXISTS "gag"`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "user_settings" DROP COLUMN IF EXISTS "blindfold"`,
     );
   }
 

@@ -5,16 +5,16 @@ export class Migration1777228580051 implements MigrationInterface {
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(
-      `ALTER TABLE "active_sessions" DROP COLUMN "description"`,
+      `ALTER TABLE "active_sessions" DROP COLUMN IF EXISTS "description"`,
     );
     await queryRunner.query(
-      `ALTER TABLE "active_sessions" ADD "bondageDescription" text`,
+      `ALTER TABLE "active_sessions" ADD COLUMN IF NOT EXISTS "bondageDescription" text`,
     );
     await queryRunner.query(
-      `ALTER TABLE "active_sessions" ADD "gagDescription" text`,
+      `ALTER TABLE "active_sessions" ADD COLUMN IF NOT EXISTS "gagDescription" text`,
     );
     await queryRunner.query(
-      `ALTER TABLE "active_sessions" ADD "blindfoldDescription" text`,
+      `ALTER TABLE "active_sessions" ADD COLUMN IF NOT EXISTS "blindfoldDescription" text`,
     );
   }
 
