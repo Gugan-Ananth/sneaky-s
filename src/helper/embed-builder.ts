@@ -1,6 +1,15 @@
 import { EmbedBuilder } from 'discord.js';
 import { ActiveSession } from 'src/bondage/active-session.entity';
+import { formatUserMentions } from 'src/bondage/cage-permissions';
 import { UserSettings } from 'src/user/user-settings.entity';
+
+function formatFriendList(friendIds?: string[]): string {
+  if (!friendIds?.length) {
+    return 'None — use `/friends` to add people who can visit your private cages';
+  }
+
+  return formatUserMentions(friendIds);
+}
 
 function createRestrictionsValue(session?: ActiveSession): string {
   return `${session?.gag ? 'Gag\n' : 'Not Gagged\n'}${session?.blindfold ? 'Blindfold\n' : 'Not Blindfolded\n'}`;
@@ -22,6 +31,10 @@ export function createSettingsEmbed(settings?: UserSettings): EmbedBuilder {
         value: settings?.safeword ?? 'Red',
         inline: true,
       },
+      {
+        name: 'Private Cage Friends',
+        value: formatFriendList(settings?.friendIds),
+      },
     )
     .setFooter({ text: 'Settings saved successfully!' })
     .setTimestamp();
@@ -42,6 +55,10 @@ export function createProfileEmbed(settings?: UserSettings): EmbedBuilder {
         name: 'Safeword',
         value: settings?.safeword ?? 'Red',
         inline: true,
+      },
+      {
+        name: 'Private Cage Friends',
+        value: formatFriendList(settings?.friendIds),
       },
     )
     .setFooter({ text: 'User bondage profile!' })

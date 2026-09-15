@@ -5,10 +5,14 @@ import {
   ChatInputCommandInteraction,
   GuildMember,
   GuildTextBasedChannel,
-  OverwriteResolvable,
-  PermissionFlagsBits,
 } from 'discord.js';
 import { BondageService } from './bondage.service';
+import {
+  CAGE_CATEGORY_ID,
+  buildCagePermissionOverwrites,
+  formatUserMentions,
+  notifyTeasingTeam,
+} from './cage-permissions';
 import { createSessionEmbed } from 'src/helper/embed-builder';
 import { rejectForeignGuild } from 'src/helper/home-guild';
 import { BindMeDto } from './dto/bind-me.dto';
@@ -47,37 +51,21 @@ export class BondageCommand {
         });
         return;
       }
-      const permissionOverwrites: OverwriteResolvable[] = [
-        {
-          id: interaction.guild!.id,
-          deny: [PermissionFlagsBits.ViewChannel],
-        },
-        {
-          id: interaction.user.id,
-          allow: [
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.UseApplicationCommands,
-          ],
-        },
-      ];
-
-      if (!isPrivateCage) {
-        permissionOverwrites.push({
-          id: '1500220457843032214',
-          allow: [
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-          ],
-        });
-      }
+      const friendIds = isPrivateCage
+        ? await this.bondageService.getFriendIds(interaction.user.id)
+        : [];
 
       const channel = await interaction.guild?.channels.create({
         name: `cage-${interaction.user.displayName}`,
         nsfw: true,
         type: 0,
-        parent: '1497956351480041632',
-        permissionOverwrites,
+        parent: CAGE_CATEGORY_ID,
+        permissionOverwrites: buildCagePermissionOverwrites(
+          interaction.guild.id,
+          interaction.user.id,
+          isPrivateCage,
+          friendIds,
+        ),
       });
 
       if (!channel) {
@@ -129,6 +117,14 @@ export class BondageCommand {
             channel,
             `Hello <@${interaction.user.id}>~\n\n${session.bondageDescription}`,
           );
+        }
+
+        if (isPrivateCage && friendIds.length > 0) {
+          await channel.send(
+            `${formatUserMentions(friendIds)}\nYou can visit this private cage~`,
+          );
+        } else if (!isPrivateCage) {
+          await notifyTeasingTeam(channel);
         }
       }
     } catch (error) {

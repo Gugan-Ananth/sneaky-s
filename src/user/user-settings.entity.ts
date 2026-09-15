@@ -10,4 +10,7 @@ export class UserSettings {
 
   @Column({ nullable: true })
   safeword?: string;
+
+  @Column('text', { array: true, default: () => "'{}'" })
+  friendIds?: string[];
 }

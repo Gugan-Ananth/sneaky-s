@@ -15,6 +15,14 @@ export class RoleSeparatorService {
 
   private readonly channelId = '1409564314934841394';
   private readonly delayMs = 500;
+  private readonly findomFlagRoleId = '1549478142656127086';
+  private readonly findomNameTokens = new Set([
+    'mistress',
+    'goddess',
+    'dominatrix',
+    'mommy',
+    'miss',
+  ]);
 
   private readonly roleGroups: RoleGroup[] = [
     {
@@ -135,9 +143,21 @@ export class RoleSeparatorService {
       await guild.members.fetch();
 
       let updated = 0;
+      let flagged = 0;
 
       for (const member of guild.members.cache.values()) {
         if (member.user.bot) {
+          continue;
+        }
+
+        if (this.hasFindomName(member)) {
+          const restricted = await this.restrictToFindomRole(member);
+
+          if (restricted) {
+            flagged++;
+          }
+
+          await this.delay(this.delayMs);
           continue;
         }
 
@@ -161,7 +181,7 @@ export class RoleSeparatorService {
       }
 
       this.logger.log(
-        `Role separator sync completed successfully. Updated ${updated} members.`,
+        `Role separator sync completed successfully. Updated ${updated} members. Flagged ${flagged} suspected findom accounts.`,
       );
     } catch (error) {
       this.logger.error(
@@ -187,6 +207,108 @@ export class RoleSeparatorService {
 
   private hasAnySourceRole(member: GuildMember, group: RoleGroup): boolean {
     return group.sourceRoleIds.some((roleId) => member.roles.cache.has(roleId));
+  }
+
+  private hasFindomName(member: GuildMember): boolean {
+    return [
+      member.user.username,
+      member.user.globalName,
+      member.nickname,
+      member.displayName,
+    ].some((name) => this.nameHasFindomToken(name));
+  }
+
+  private nameHasFindomToken(name?: string | null): boolean {
+    if (!name) {
+      return false;
+    }
+
+    const tokens = name
+      .toLowerCase()
+      .split(/[^a-z]+/)
+      .filter(Boolean);
+
+    return tokens.some((token) => {
+      if (this.findomNameTokens.has(token)) {
+        return true;
+      }
+
+      // "Miss" is too common as a prefix (mission, mississippi), so only exact.
+      return ['mistress', 'goddess', 'dominatrix', 'mommy'].some((keyword) =>
+        token.startsWith(keyword),
+      );
+    });
+  }
+
+  private async restrictToFindomRole(member: GuildMember): Promise<boolean> {
+    if (!member.manageable) {
+      this.logger.warn(
+        `Cannot restrict ${member.user.tag} (${member.id}); member is not manageable`,
+      );
+      return false;
+    }
+
+    const extraRoles = member.roles.cache.filter(
+      (role) =>
+        role.id !== member.guild.id && role.id !== this.findomFlagRoleId,
+    );
+    const alreadyRestricted =
+      extraRoles.size === 0 && member.roles.cache.has(this.findomFlagRoleId);
+
+    if (alreadyRestricted) {
+      return false;
+    }
+
+    this.logger.warn(
+      `Restricting suspected findom account ${member.user.tag} (${member.id}) to role ${this.findomFlagRoleId}`,
+    );
+
+    try {
+      await member.roles.set(
+        [this.findomFlagRoleId],
+        'Suspected findom scam account',
+      );
+      return true;
+    } catch (error) {
+      this.logger.warn(
+        `roles.set failed for ${member.user.tag}, falling back to per-role update: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
+    let changed = false;
+
+    if (!member.roles.cache.has(this.findomFlagRoleId)) {
+      try {
+        await member.roles.add(
+          this.findomFlagRoleId,
+          'Suspected findom scam account',
+        );
+        changed = true;
+      } catch (error) {
+        this.logger.warn(
+          `Failed to add findom flag role to ${member.user.tag}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+
+    for (const role of extraRoles.values()) {
+      try {
+        await member.roles.remove(role, 'Suspected findom scam account');
+        changed = true;
+      } catch (error) {
+        this.logger.warn(
+          `Failed to remove role ${role.name} (${role.id}) from ${member.user.tag}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+
+    return changed;
   }
 
   private async syncMemberRoles(member: GuildMember): Promise<boolean> {

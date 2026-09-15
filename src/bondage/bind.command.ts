@@ -5,12 +5,17 @@ import {
   GuildTextBasedChannel,
   GuildMember,
   Message,
-  PermissionFlagsBits,
   ChannelType,
 } from 'discord.js';
 import { createCustomSessionEmbed } from 'src/helper/embed-builder';
 import { rejectForeignGuild } from 'src/helper/home-guild';
 import { BondageService } from './bondage.service';
+import {
+  CAGE_CATEGORY_ID,
+  buildCagePermissionOverwrites,
+  formatUserMentions,
+  notifyTeasingTeam,
+} from './cage-permissions';
 
 const QUESTION_TIMEOUT_MS = 50_000;
 
@@ -197,7 +202,8 @@ const BIND_QUESTIONS: readonly BindQuestion[] = [
 
 const PRIVATE_CAGE_QUESTION: BindQuestion = {
   target: 'Private Cage',
-  prompt: 'Would you like a private cage?',
+  prompt:
+    'Would you like a private cage? (Only you and your friends can see it)',
   options: ['Yes', 'No'],
 };
 
@@ -414,37 +420,21 @@ export class BindCommand {
     answers: BindAnswer[],
     isPrivateCage: boolean,
   ): Promise<void> {
-    const permissionOverwrites = [
-      {
-        id: interaction.guild!.id,
-        deny: [PermissionFlagsBits.ViewChannel],
-      },
-      {
-        id: interaction.user.id,
-        allow: [
-          PermissionFlagsBits.ViewChannel,
-          PermissionFlagsBits.SendMessages,
-          PermissionFlagsBits.UseApplicationCommands,
-        ],
-      },
-    ];
-
-    if (!isPrivateCage) {
-      permissionOverwrites.push({
-        id: '1500220457843032214',
-        allow: [
-          PermissionFlagsBits.ViewChannel,
-          PermissionFlagsBits.SendMessages,
-        ],
-      });
-    }
+    const friendIds = isPrivateCage
+      ? await this.bondageService.getFriendIds(interaction.user.id)
+      : [];
 
     const channel = await interaction.guild?.channels.create({
       name: `cage-${interaction.user.displayName}`,
       nsfw: true,
       type: ChannelType.GuildText,
-      parent: '1497956351480041632',
-      permissionOverwrites,
+      parent: CAGE_CATEGORY_ID,
+      permissionOverwrites: buildCagePermissionOverwrites(
+        interaction.guild.id,
+        interaction.user.id,
+        isPrivateCage,
+        friendIds,
+      ),
     });
 
     if (!channel) {
@@ -475,6 +465,14 @@ export class BindCommand {
 
     await channel.send(`Hello <@${interaction.user.id}>`);
     await channel.send({ embeds: [embed] });
+
+    if (isPrivateCage && friendIds.length > 0) {
+      await channel.send(
+        `${formatUserMentions(friendIds)}\nYou can visit this private cage~`,
+      );
+    } else if (!isPrivateCage) {
+      await notifyTeasingTeam(channel);
+    }
   }
 
   private getSessionRestrictions(answers: BindAnswer[]): {

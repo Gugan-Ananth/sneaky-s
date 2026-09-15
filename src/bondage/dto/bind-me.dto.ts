@@ -27,7 +27,7 @@ export class BindMeDto {
     type: ParamType.INTEGER,
     required: false,
     description:
-      'If you want to get a private cage? (No one else can come in) (default: no)',
+      'If you want a private cage that only you and your friends can see (default: no)',
   })
   privateCage?: number;
 }

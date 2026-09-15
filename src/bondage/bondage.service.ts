@@ -4,9 +4,16 @@ import { ActiveSession } from './active-session.entity';
 import { Repository } from 'typeorm';
 import { UserSettings } from 'src/user/user-settings.entity';
 import { scenarios } from './scenarios';
-import { Client, DiscordAPIError, Guild, GuildMember } from 'discord.js';
+import {
+  Client,
+  DiscordAPIError,
+  Guild,
+  GuildMember,
+  OverwriteType,
+} from 'discord.js';
 import { BondageScenario } from './bondage-scenarios';
 import { InjectDiscordClient } from '@discord-nestjs/core';
+import { formatUserMentions, isPrivateCageChannel } from './cage-permissions';
 
 const CAGE_ROLE_ID = '1497994703050903735';
 
@@ -224,6 +231,95 @@ export class BondageService {
     return await this.activeSessionRepository.findOne({
       where: { userId, status: 'active' },
     });
+  }
+
+  async getFriendIds(userId: string): Promise<string[]> {
+    const settings = await this.userSettingsRepository.findOne({
+      where: { userId },
+    });
+    return settings?.friendIds ?? [];
+  }
+
+  async syncCageFriendAccess(userId: string): Promise<boolean> {
+    const session = await this.getActiveSession(userId);
+    if (!session?.channelId) {
+      return false;
+    }
+
+    try {
+      const channel = await this.client.channels.fetch(session.channelId);
+      if (
+        !channel ||
+        channel.isDMBased() ||
+        !('permissionOverwrites' in channel) ||
+        !isPrivateCageChannel(channel)
+      ) {
+        return false;
+      }
+
+      const friendIds = new Set(await this.getFriendIds(userId));
+      const overwrites = channel.permissionOverwrites.cache;
+
+      for (const overwrite of overwrites.values()) {
+        if (overwrite.type !== OverwriteType.Member) {
+          continue;
+        }
+        if (overwrite.id === userId || friendIds.has(overwrite.id)) {
+          continue;
+        }
+
+        await channel.permissionOverwrites.delete(overwrite.id);
+      }
+
+      for (const friendId of friendIds) {
+        if (friendId === userId) {
+          continue;
+        }
+
+        await channel.permissionOverwrites.edit(friendId, {
+          ViewChannel: true,
+          SendMessages: true,
+        });
+      }
+
+      return true;
+    } catch (error) {
+      this.logger.warn(
+        `Failed to sync cage friends for ${userId}: ${this.errorMessage(error)}`,
+      );
+      return false;
+    }
+  }
+
+  async notifyCageVisitors(userId: string, friendIds: string[]): Promise<void> {
+    if (friendIds.length === 0) {
+      return;
+    }
+
+    const session = await this.getActiveSession(userId);
+    if (!session?.channelId) {
+      return;
+    }
+
+    try {
+      const channel = await this.client.channels.fetch(session.channelId);
+      if (
+        !channel?.isTextBased() ||
+        channel.isDMBased() ||
+        !('permissionOverwrites' in channel) ||
+        !isPrivateCageChannel(channel)
+      ) {
+        return;
+      }
+
+      await channel.send(
+        `${formatUserMentions(friendIds)}\nYou can visit this private cage~`,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Failed to notify cage visitors for ${userId}: ${this.errorMessage(error)}`,
+      );
+    }
   }
 
   private getRandomScenario(): BondageScenario {

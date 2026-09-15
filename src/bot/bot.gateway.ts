@@ -39,7 +39,11 @@ export class BotGateway {
     if (message.author.bot) return;
     if (!isHomeGuild(message.guildId)) return;
     if (message.channel.id === '1409564314934841394') {
-      if (
+      if (isAccountTooNew(message.author.createdTimestamp)) {
+        await message.reply(
+          'Only discord account that are 30 days old are allowed!',
+        );
+      } else if (
         !(
           (message.content?.includes('name') ?? false) ||
           (message.content?.includes('Name') ?? false)
@@ -439,6 +443,13 @@ function garbleText(message: Message) {
       return Math.random() > 0.9 ? 'm' : char;
     })
     .join('')}\n\n||*${message.content}*||`;
+}
+
+const MIN_ACCOUNT_AGE_DAYS = 30;
+const MIN_ACCOUNT_AGE_MS = MIN_ACCOUNT_AGE_DAYS * 24 * 60 * 60 * 1000;
+
+function isAccountTooNew(createdTimestamp: number): boolean {
+  return Date.now() - createdTimestamp < MIN_ACCOUNT_AGE_MS;
 }
 
 function ageValidator(content: string) {
