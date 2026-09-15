@@ -4,6 +4,7 @@ import { Injectable, PipeTransform, Type } from 'node_modules/@nestjs/common';
 import { SettingsDto } from './dto/settings.dto';
 import { ChatInputCommandInteraction } from 'discord.js';
 import { createProfileEmbed } from 'src/helper/embed-builder';
+import { rejectForeignGuild } from 'src/helper/home-guild';
 import { UserService } from './user.service';
 
 @Command({
@@ -20,6 +21,10 @@ export class UserSettingsCommand {
     @InteractionEvent(SlashCommandPipe as unknown as Type<PipeTransform>)
     options: SettingsDto,
   ): Promise<void> {
+    if (await rejectForeignGuild(interaction)) {
+      return;
+    }
+
     await interaction.deferReply();
     try {
       const userId = interaction.user.id;

@@ -10,6 +10,7 @@ import {
 } from 'discord.js';
 import { BondageService } from './bondage.service';
 import { createSessionEmbed } from 'src/helper/embed-builder';
+import { rejectForeignGuild } from 'src/helper/home-guild';
 import { BindMeDto } from './dto/bind-me.dto';
 
 @Command({
@@ -26,6 +27,10 @@ export class BondageCommand {
     @InteractionEvent(SlashCommandPipe as unknown as Type<PipeTransform>)
     options: BindMeDto,
   ): Promise<void> {
+    if (await rejectForeignGuild(interaction)) {
+      return;
+    }
+
     await interaction.deferReply();
     try {
       const member = interaction.member as GuildMember;

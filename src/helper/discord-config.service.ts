@@ -4,6 +4,7 @@ import {
   DiscordOptionsFactory,
 } from '@discord-nestjs/core';
 import { GatewayIntentBits } from 'discord.js';
+import { HOME_GUILD_ID } from './home-guild';
 
 @Injectable()
 export class DiscordConfigService implements DiscordOptionsFactory {
@@ -18,6 +19,12 @@ export class DiscordConfigService implements DiscordOptionsFactory {
           GatewayIntentBits.GuildMembers,
         ],
       },
+      registerCommandOptions: [
+        {
+          forGuild: HOME_GUILD_ID,
+          removeCommandsBefore: true,
+        },
+      ],
     };
   }
 }

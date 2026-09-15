@@ -1,7 +1,16 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Once, InjectDiscordClient, On } from '@discord-nestjs/core';
-import { Client, GuildMember, Message, TextChannel, Webhook } from 'discord.js';
+import {
+  ApplicationIntegrationType,
+  Client,
+  Guild,
+  GuildMember,
+  Message,
+  TextChannel,
+  Webhook,
+} from 'discord.js';
 import { BondageService } from 'src/bondage/bondage.service';
+import { HOME_GUILD_ID, isHomeGuild } from 'src/helper/home-guild';
 
 @Injectable()
 export class BotGateway {
@@ -15,13 +24,20 @@ export class BotGateway {
   ) {}
 
   @Once('ready')
-  onReady() {
+  async onReady() {
     this.logger.log(`Bot ${this.client.user?.tag} was started!`);
+    await this.restrictToHomeGuild();
+  }
+
+  @On('guildCreate')
+  async onGuildCreate(guild: Guild): Promise<void> {
+    await this.leaveIfForeignGuild(guild);
   }
 
   @On('messageCreate')
   async onMessage(message: Message): Promise<void> {
     if (message.author.bot) return;
+    if (!isHomeGuild(message.guildId)) return;
     if (message.channel.id === '1409564314934841394') {
       if (
         !(
@@ -191,6 +207,143 @@ export class BotGateway {
 
         await message.delete().catch(() => null);
       }
+    }
+  }
+
+  private async restrictToHomeGuild(): Promise<void> {
+    await this.lockApplicationToHomeGuild();
+    await this.clearGlobalCommands();
+    await this.leaveForeignGuilds();
+  }
+
+  private async lockApplicationToHomeGuild(): Promise<void> {
+    try {
+      const application = await this.client.application?.fetch();
+
+      if (!application) {
+        this.logger.error('Could not fetch the Discord application');
+        return;
+      }
+
+      this.logger.log(
+        `Install counts before lockdown: ${application.approximateGuildCount ?? '?'} servers, ${application.approximateUserInstallCount ?? '?'} individual users`,
+      );
+
+      const guildInstall =
+        application.integrationTypesConfig?.[
+          ApplicationIntegrationType.GuildInstall
+        ];
+      const oauth2 = guildInstall?.oauth2InstallParams;
+      const scopes = oauth2?.scopes?.length
+        ? [...oauth2.scopes]
+        : ['bot', 'applications.commands'];
+      const permissions = oauth2?.permissions?.bitfield.toString() ?? '0';
+
+      const guildInstallConfig = {
+        [ApplicationIntegrationType.GuildInstall]: {
+          oauth2_install_params: {
+            scopes,
+            permissions,
+          },
+        },
+      };
+
+      try {
+        await this.client.rest.patch('/applications/@me', {
+          body: {
+            bot_public: false,
+            integration_types_config: {
+              ...guildInstallConfig,
+              [ApplicationIntegrationType.UserInstall]: null,
+            },
+          },
+        });
+      } catch {
+        await this.client.rest.patch('/applications/@me', {
+          body: {
+            bot_public: false,
+            integration_types_config: guildInstallConfig,
+          },
+        });
+      }
+
+      this.logger.log(
+        'Disabled user installs and public bot invites; only the home guild install remains enabled',
+      );
+    } catch (error) {
+      this.logger.error(
+        'Failed to lock application to the home guild',
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+  }
+
+  private async clearGlobalCommands(): Promise<void> {
+    try {
+      await this.client.application?.commands.set([]);
+      this.logger.log(
+        'Cleared global slash commands so they only exist in the home server',
+      );
+    } catch (error) {
+      this.logger.error(
+        'Failed to clear global slash commands',
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+  }
+
+  private async leaveForeignGuilds(): Promise<void> {
+    try {
+      await this.client.guilds.fetch();
+    } catch (error) {
+      this.logger.error(
+        'Failed to fetch guild list',
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+
+    const guilds = [...this.client.guilds.cache.values()];
+    this.logger.log(
+      `Connected to ${guilds.length} server(s): ${guilds
+        .map((guild) => `${guild.name} (${guild.id})`)
+        .join(', ')}`,
+    );
+
+    for (const guild of guilds) {
+      await this.leaveIfForeignGuild(guild);
+    }
+
+    const remaining = [...this.client.guilds.cache.values()];
+    this.logger.log(
+      `Remaining after leave: ${remaining.length} server(s): ${
+        remaining.map((guild) => `${guild.name} (${guild.id})`).join(', ') ||
+        'none'
+      }`,
+    );
+
+    if (!this.client.guilds.cache.has(HOME_GUILD_ID)) {
+      this.logger.error(
+        `Home guild ${HOME_GUILD_ID} is not in the remaining server list`,
+      );
+    }
+  }
+
+  private async leaveIfForeignGuild(guild: Guild): Promise<void> {
+    if (isHomeGuild(guild.id)) {
+      return;
+    }
+
+    this.logger.warn(
+      `Leaving unauthorized guild ${guild.name} (${guild.id}); this bot is restricted to ${HOME_GUILD_ID}`,
+    );
+
+    try {
+      await guild.leave();
+    } catch (error) {
+      this.logger.error(
+        `Failed to leave guild ${guild.id}`,
+        error instanceof Error ? error.stack : String(error),
+      );
     }
   }
 

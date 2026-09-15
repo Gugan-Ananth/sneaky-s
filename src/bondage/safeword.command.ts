@@ -1,6 +1,7 @@
 import { Command, Handler, InteractionEvent } from '@discord-nestjs/core/dist';
 import { Injectable } from '@nestjs/common';
 import { ChatInputCommandInteraction, GuildMember } from 'discord.js';
+import { rejectForeignGuild } from 'src/helper/home-guild';
 import { BondageService } from './bondage.service';
 
 @Command({
@@ -15,6 +16,10 @@ export class SafewordCommand {
   async onSafeword(
     @InteractionEvent() interaction: ChatInputCommandInteraction,
   ): Promise<void> {
+    if (await rejectForeignGuild(interaction)) {
+      return;
+    }
+
     await interaction.deferReply();
     try {
       const member = interaction.member as GuildMember;

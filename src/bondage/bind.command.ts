@@ -9,6 +9,7 @@ import {
   ChannelType,
 } from 'discord.js';
 import { createCustomSessionEmbed } from 'src/helper/embed-builder';
+import { rejectForeignGuild } from 'src/helper/home-guild';
 import { BondageService } from './bondage.service';
 
 const QUESTION_TIMEOUT_MS = 50_000;
@@ -226,6 +227,10 @@ export class BindCommand {
   async onBind(
     @InteractionEvent() interaction: ChatInputCommandInteraction,
   ): Promise<void> {
+    if (await rejectForeignGuild(interaction)) {
+      return;
+    }
+
     await interaction.deferReply();
 
     if (this.pendingSetups.has(interaction.user.id)) {

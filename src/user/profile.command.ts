@@ -3,6 +3,7 @@ import { Injectable } from '@nestjs/common';
 import { UserService } from './user.service';
 import { ChatInputCommandInteraction } from 'discord.js';
 import { createSettingsEmbed } from 'src/helper/embed-builder';
+import { rejectForeignGuild } from 'src/helper/home-guild';
 
 @Command({
   name: 'profile',
@@ -16,6 +17,10 @@ export class UserProfileCommand {
   async onSettings(
     @InteractionEvent() interaction: ChatInputCommandInteraction,
   ): Promise<void> {
+    if (await rejectForeignGuild(interaction)) {
+      return;
+    }
+
     await interaction.deferReply();
     try {
       const userId = interaction.user.id;
