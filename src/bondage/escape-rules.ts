@@ -70,7 +70,7 @@ export type EscapeState = {
 
 export type Rng = () => number;
 
-export const ACTION_COOLDOWN_MS = 15_000;
+export const ACTION_COOLDOWN_MS = 5_000;
 export const SEARCH_COOLDOWN_MS = 120_000;
 export const BLINDFOLD_MISS_CHANCE = 0.3;
 

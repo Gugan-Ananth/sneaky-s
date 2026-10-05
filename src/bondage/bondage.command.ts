@@ -108,22 +108,22 @@ export class BondageCommand {
             `Hello <@${interaction.user.id}>~\n\n${session.bondageDescription}`,
           );
           await channel.send(
-            `** **\n${session.gagDescription}\n\n${session.blindfoldDescription}\n${ESCAPE_HINT}`,
+            `** **\n${session.gagDescription}\n\n${session.blindfoldDescription}`,
           );
         } else if (session.blindfold ?? false) {
           await this.sendLongMessage(
             channel,
-            `Hello <@${interaction.user.id}>~\n\n${session.bondageDescription}\n\n${session.blindfoldDescription}\n${ESCAPE_HINT}`,
+            `Hello <@${interaction.user.id}>~\n\n${session.bondageDescription}\n\n${session.blindfoldDescription}`,
           );
         } else if (session.gag ?? false) {
           await this.sendLongMessage(
             channel,
-            `Hello <@${interaction.user.id}>~\n\n${session.bondageDescription}\n\n${session.gagDescription}\n${ESCAPE_HINT}`,
+            `Hello <@${interaction.user.id}>~\n\n${session.bondageDescription}\n\n${session.gagDescription}`,
           );
         } else {
           await this.sendLongMessage(
             channel,
-            `Hello <@${interaction.user.id}>~\n\n${session.bondageDescription}\n${ESCAPE_HINT}`,
+            `Hello <@${interaction.user.id}>~\n\n${session.bondageDescription}`,
           );
         }
 
