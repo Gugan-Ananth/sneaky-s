@@ -8,13 +8,12 @@ import {
   actionsFor,
   EscapeAction,
   EscapeState,
+  escapePace,
   getReachableRestraints,
-  handsBlocked,
   inventoryOf,
   Inventory,
   progressBar,
   Restraint,
-  wristsHindered,
 } from './escape-rules';
 
 const ACTION_LABELS: Record<EscapeAction, string> = {
@@ -85,7 +84,7 @@ export function renderEscapeView(input: {
   notice?: string;
   focusId?: string;
 }): EscapeView {
-  const reachable = getReachableRestraints(input.state, input.isHelper);
+  const reachable = getReachableRestraints(input.state);
   const focus =
     reachable.find((restraint) => restraint.id === input.focusId) ??
     (reachable.length === 1 ? reachable[0] : undefined);
@@ -103,22 +102,30 @@ export function renderEscapeView(input: {
     lines.push('The blindfold makes your hands miss.');
   }
 
-  if (
-    !input.isHelper &&
-    handsBlocked(input.state) &&
-    reachable.some((restraint) => restraint.selfNeedsHands)
-  ) {
-    lines.push('Your hands are still stuck, so this goes slowly.');
-  }
-
-  if (
-    !input.isHelper &&
-    focus?.id === 'wrists' &&
-    wristsHindered(input.state)
-  ) {
-    lines.push(
-      'Your elbows and upper arms are still tied, so your wrists barely move.',
-    );
+  if (focus) {
+    const pace = escapePace(input.state, focus, input.isHelper);
+    if (input.isHelper) {
+      lines.push('In your hands, this comes apart fast.');
+    } else if (pace === 'hard' && focus.id !== 'arms') {
+      const armPiece = ['forearms', 'elbows', 'upper-arms'].includes(focus.id);
+      lines.push(
+        armPiece
+          ? 'Wrists, then forearms, then elbows, then upper arms. Out of order, this barely moves.'
+          : 'This barely moves while the arms are still tied.',
+      );
+    } else if (
+      pace === 'easy' &&
+      input.state.restraints.some(
+        (restraint) =>
+          restraint.released &&
+          (restraint.id === 'arms' ||
+            ['wrists', 'forearms', 'elbows', 'upper-arms'].includes(
+              restraint.id,
+            )),
+      )
+    ) {
+      lines.push('The arms are free, so this comes apart fast.');
+    }
   }
 
   if (input.isHelper) lines.push(describeInventory(inventory));

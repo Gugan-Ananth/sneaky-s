@@ -13,7 +13,7 @@ import {
   formatUserMentions,
   notifyTeasingTeam,
 } from './cage-permissions';
-import { createSessionEmbed, ESCAPE_HINT } from 'src/helper/embed-builder';
+import { createSessionEmbed } from 'src/helper/embed-builder';
 import { rejectForeignGuild } from 'src/helper/home-guild';
 import { BindMeDto } from './dto/bind-me.dto';
 import { scenarioEscapeState } from './restraints';
@@ -47,7 +47,7 @@ export class BondageCommand {
 
       if (existingSession) {
         await interaction.followUp({
-          content: `You are already tied up! Try escaping first~\n${ESCAPE_HINT}`,
+          content: 'You are already tied up! Try escaping first~',
           ephemeral: true,
         });
         return;
@@ -96,7 +96,7 @@ export class BondageCommand {
       );
 
       const embed = createSessionEmbed(session);
-      await interaction.followUp({ content: ESCAPE_HINT, embeds: [embed] });
+      await interaction.followUp({ embeds: [embed] });
 
       await member.roles.set([]);
       await member.roles.add('1497994703050903735');

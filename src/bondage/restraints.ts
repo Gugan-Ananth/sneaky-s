@@ -305,7 +305,6 @@ export function restraintsForScenario(
     }),
     sceneRestraint(scenarioId, 'legs', 'Legs', required.legs, {
       selfNeedsHands: true,
-      selfAfter: ['arms'],
     }),
   ];
 

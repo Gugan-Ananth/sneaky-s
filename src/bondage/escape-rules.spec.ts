@@ -128,23 +128,23 @@ describe('escape rules', () => {
       { target: 'Additional Gag Layer', answer: 'Electric Tape' },
     ]);
     const state = emptyEscapeState(null, restraints);
-    expect(getReachableRestraints(state, false).map((item) => item.id)).toEqual(
-      ['gag-extra'],
-    );
+    expect(getReachableRestraints(state).map((item) => item.id)).toEqual([
+      'gag-extra',
+    ]);
 
     restraints.find((item) => item.id === 'gag-extra')!.released = true;
-    expect(getReachableRestraints(state, false).map((item) => item.id)).toEqual(
-      ['gag-mouth'],
-    );
+    expect(getReachableRestraints(state).map((item) => item.id)).toEqual([
+      'gag-mouth',
+    ]);
     expect(derivedRestrictions(state).gag).toBe(true);
 
     restraints.find((item) => item.id === 'gag-mouth')!.released = true;
-    expect(getReachableRestraints(state, false).map((item) => item.id)).toEqual(
-      ['gag-stuffing'],
-    );
+    expect(getReachableRestraints(state).map((item) => item.id)).toEqual([
+      'gag-stuffing',
+    ]);
   });
 
-  it('halves self progress on the legs while the wrists are bound', () => {
+  it('barely moves other restraints while any arm piece is tied', () => {
     const restraints = buildBindRestraints([
       { target: 'Wrists', answer: 'Rope' },
       { target: 'Ankles', answer: 'Rope' },
@@ -152,38 +152,91 @@ describe('escape rules', () => {
     const solo = act(emptyEscapeState(null, restraints), 'pick', {
       restraintId: 'ankles',
     });
-    expect(progressOf(solo.state, 'ankles')).toBe(12);
+    expect(progressOf(solo.state, 'ankles')).toBe(1);
 
     const helped = act(emptyEscapeState(null, restraints), 'pick', {
       restraintId: 'ankles',
       actorId: 'friend',
       captiveId: 'self',
     });
-    expect(progressOf(helped.state, 'ankles')).toBe(50);
+    expect(progressOf(helped.state, 'ankles')).toBe(35);
+
+    restraints.find((item) => item.id === 'wrists')!.released = true;
+    const loose = act(emptyEscapeState(null, restraints), 'pick', {
+      restraintId: 'ankles',
+    });
+    expect(progressOf(loose.state, 'ankles')).toBe(35);
   });
 
-  it('halves wrist progress while the elbows are still tied', () => {
-    const hindered = buildBindRestraints([
+  it('frees arms wrists first and keeps that step at normal speed', () => {
+    const tied = buildBindRestraints([
       { target: 'Wrists', answer: 'Rope' },
+      { target: 'Forearms', answer: 'Rope' },
       { target: 'Elbows', answer: 'Rope' },
+      { target: 'Upper arms', answer: 'Rope' },
+      { target: 'Mouth Gag', answer: 'Rope Cleave Gag' },
     ]);
-    const slow = act(emptyEscapeState(null, hindered), 'pick', {
-      restraintId: 'wrists',
-    });
-    expect(progressOf(slow.state, 'wrists')).toBe(12);
+    const state = emptyEscapeState(null, tied);
 
-    const open = buildBindRestraints([{ target: 'Wrists', answer: 'Rope' }]);
-    const normal = act(emptyEscapeState(null, open), 'pick');
-    expect(progressOf(normal.state, 'wrists')).toBe(25);
+    expect(
+      progressOf(act(state, 'pick', { restraintId: 'wrists' }).state, 'wrists'),
+    ).toBe(25);
+    expect(
+      progressOf(
+        act(state, 'pick', { restraintId: 'forearms' }).state,
+        'forearms',
+      ),
+    ).toBe(1);
+    expect(
+      progressOf(act(state, 'pick', { restraintId: 'elbows' }).state, 'elbows'),
+    ).toBe(1);
+    expect(
+      progressOf(
+        act(state, 'pick', { restraintId: 'upper-arms' }).state,
+        'upper-arms',
+      ),
+    ).toBe(1);
+    expect(
+      progressOf(
+        act(state, 'pick', { restraintId: 'gag-mouth' }).state,
+        'gag-mouth',
+      ),
+    ).toBe(1);
+
+    tied.find((item) => item.id === 'wrists')!.released = true;
+    const afterWrists = emptyEscapeState(null, tied);
+    expect(
+      progressOf(
+        act(afterWrists, 'pick', { restraintId: 'forearms' }).state,
+        'forearms',
+      ),
+    ).toBe(25);
+    expect(
+      progressOf(
+        act(afterWrists, 'pick', { restraintId: 'elbows' }).state,
+        'elbows',
+      ),
+    ).toBe(1);
+
+    for (const id of ['forearms', 'elbows', 'upper-arms']) {
+      tied.find((item) => item.id === id)!.released = true;
+    }
+    const ungagged = act(emptyEscapeState(null, tied), 'pick', {
+      restraintId: 'gag-mouth',
+    });
+    expect(progressOf(ungagged.state, 'gag-mouth')).toBe(35);
 
     const chest = buildBindRestraints([
       { target: 'Elbows', answer: 'Rope' },
       { target: 'Chest', answer: 'Rope Harness' },
     ]);
-    const torso = act(emptyEscapeState(null, chest), 'pick', {
-      restraintId: 'chest',
-    });
-    expect(progressOf(torso.state, 'chest')).toBe(25);
+    expect(
+      progressOf(
+        act(emptyEscapeState(null, chest), 'pick', { restraintId: 'chest' })
+          .state,
+        'chest',
+      ),
+    ).toBe(1);
   });
 
   it('makes only the captive miss while blindfolded', () => {
@@ -209,7 +262,7 @@ describe('escape rules', () => {
       rng: () => 0,
     });
     expect(helped.effect).toBe('progress');
-    expect(progressOf(helped.state, 'wrists')).toBe(50);
+    expect(progressOf(helped.state, 'wrists')).toBe(35);
   });
 
   it('spends a key on a lock and refuses scissors', () => {
@@ -259,6 +312,13 @@ describe('escape rules', () => {
     );
     expect(progressOf(plain.state, 'wrists')).toBe(20);
 
+    const pinnedSolo = emptyEscapeState(null, [
+      buildBindRestraints([{ target: 'Wrists', answer: 'Hand-cuff' }])[0],
+    ]);
+    pinnedSolo.items.self = { pins: 1, scissors: 0, keys: 0 };
+    const withPin = act(pinnedSolo, 'rake');
+    expect(progressOf(withPin.state, 'wrists')).toBe(40);
+
     const pinnedState = emptyEscapeState(null, [
       buildBindRestraints([{ target: 'Wrists', answer: 'Hand-cuff' }])[0],
     ]);
@@ -267,11 +327,11 @@ describe('escape rules', () => {
       actorId: 'friend',
       captiveId: 'self',
     });
-    expect(progressOf(pinned.state, 'wrists')).toBe(80);
+    expect(progressOf(pinned.state, 'wrists')).toBe(50);
   });
 
   it('signals a clear board when the last restraint comes off', () => {
-    let state = emptyEscapeState(null, [
+    const state = emptyEscapeState(null, [
       buildBindRestraints([{ target: 'Wrists', answer: 'Scarves' }])[0],
     ]);
     const first = act(state, 'pick');
@@ -337,7 +397,7 @@ describe('escape rules', () => {
     expect(!selfSearch.ok && selfSearch.reason).toBe('not-helper');
   });
 
-  it('builds /bind-me scenes as one method, with arms before legs', () => {
+  it('builds /bind-me scenes as one method, with legs slow until the arms are free', () => {
     for (const scenarioId of ['leather', 'chains'] as const) {
       const restraints = restraintsForScenario(scenarioId, {
         gag: true,
@@ -370,13 +430,17 @@ describe('escape rules', () => {
       'rope',
       restraintsForScenario('rope', { gag: false, blindfold: false }),
     );
-    expect(getReachableRestraints(scene, false).map((item) => item.id)).toEqual(
-      ['arms'],
-    );
-    expect(getReachableRestraints(scene, true).map((item) => item.id)).toEqual([
+    expect(getReachableRestraints(scene).map((item) => item.id)).toEqual([
       'arms',
       'legs',
     ]);
+    expect(
+      progressOf(act(scene, 'pick', { restraintId: 'legs' }).state, 'legs'),
+    ).toBe(1);
+    scene.restraints.find((item) => item.id === 'arms')!.released = true;
+    expect(
+      progressOf(act(scene, 'pick', { restraintId: 'legs' }).state, 'legs'),
+    ).toBe(40);
   });
 
   it('maps every /bind option and drops skips', () => {

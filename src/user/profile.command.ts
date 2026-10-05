@@ -2,7 +2,7 @@ import { Command, Handler, InteractionEvent } from '@discord-nestjs/core/dist';
 import { Injectable } from '@nestjs/common';
 import { UserService } from './user.service';
 import { ChatInputCommandInteraction } from 'discord.js';
-import { createSettingsEmbed, ESCAPE_HINT } from 'src/helper/embed-builder';
+import { createSettingsEmbed } from 'src/helper/embed-builder';
 import { rejectForeignGuild } from 'src/helper/home-guild';
 
 @Command({
@@ -26,7 +26,7 @@ export class UserProfileCommand {
       const userId = interaction.user.id;
       const savedSettings = await this.userService.getUserSettings(userId);
       const embed = createSettingsEmbed(savedSettings ?? undefined);
-      await interaction.followUp({ content: ESCAPE_HINT, embeds: [embed] });
+      await interaction.followUp({ embeds: [embed] });
     } catch (error) {
       console.log(error);
       await interaction.followUp({

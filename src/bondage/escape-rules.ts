@@ -123,16 +123,40 @@ export function isBoardClear(state: EscapeState): boolean {
   return state.restraints.every((restraint) => restraint.released);
 }
 
-export function handsBlocked(state: EscapeState): boolean {
-  return state.restraints.some(
-    (restraint) => !restraint.released && restraint.blocksHands,
-  );
+const ARM_SEQUENCE = ['wrists', 'forearms', 'elbows', 'upper-arms'] as const;
+
+export type EscapePace = 'hard' | 'normal' | 'easy';
+
+function armIndex(id: string): number {
+  return ARM_SEQUENCE.indexOf(id as (typeof ARM_SEQUENCE)[number]);
 }
 
-export function wristsHindered(state: EscapeState): boolean {
-  return state.restraints.some(
-    (restraint) => !restraint.released && restraint.hindersWrists,
+function isArmLock(restraint: Restraint): boolean {
+  return armIndex(restraint.id) !== -1 || restraint.id === 'arms';
+}
+
+export function escapePace(
+  state: EscapeState,
+  restraint: Restraint,
+  isHelper = false,
+): EscapePace {
+  if (isHelper) return 'easy';
+
+  const index = armIndex(restraint.id);
+  if (index !== -1) {
+    const earlierTied = state.restraints.some(
+      (item) =>
+        !item.released && armIndex(item.id) !== -1 && armIndex(item.id) < index,
+    );
+    return earlierTied ? 'hard' : 'normal';
+  }
+
+  if (restraint.id === 'arms') return 'normal';
+
+  const armsTied = state.restraints.some(
+    (item) => !item.released && isArmLock(item),
   );
+  return armsTied ? 'hard' : 'easy';
 }
 
 export function derivedRestrictions(state: EscapeState): {
@@ -164,11 +188,7 @@ function outermostGagLayer(state: EscapeState): number | null {
   return Math.max(...layers);
 }
 
-export function isReachable(
-  state: EscapeState,
-  restraint: Restraint,
-  isHelper: boolean,
-): boolean {
+export function isReachable(state: EscapeState, restraint: Restraint): boolean {
   if (restraint.released) return false;
 
   if (restraint.kind === 'gag') {
@@ -176,24 +196,11 @@ export function isReachable(
     if (outer === null || restraint.layer !== outer) return false;
   }
 
-  if (!isHelper) {
-    const blocked = restraint.selfAfter.some((id) => {
-      const dependency = state.restraints.find((item) => item.id === id);
-      return dependency !== undefined && !dependency.released;
-    });
-    if (blocked) return false;
-  }
-
   return true;
 }
 
-export function getReachableRestraints(
-  state: EscapeState,
-  isHelper: boolean,
-): Restraint[] {
-  return state.restraints.filter((restraint) =>
-    isReachable(state, restraint, isHelper),
-  );
+export function getReachableRestraints(state: EscapeState): Restraint[] {
+  return state.restraints.filter((restraint) => isReachable(state, restraint));
 }
 
 export function actionsFor(
@@ -351,18 +358,6 @@ function finish<T extends Record<string, unknown>>(
   };
 }
 
-function progressFactor(
-  state: EscapeState,
-  restraint: Restraint,
-  isHelper: boolean,
-): number {
-  if (isHelper) return 2;
-  let factor = 1;
-  if (restraint.selfNeedsHands && handsBlocked(state)) factor *= 0.5;
-  if (restraint.id === 'wrists' && wristsHindered(state)) factor *= 0.5;
-  return factor;
-}
-
 function markReleased(restraint: Restraint): void {
   restraint.released = true;
   restraint.progress = restraint.required;
@@ -371,15 +366,21 @@ function markReleased(restraint: Restraint): void {
 function addProgress(
   restraint: Restraint,
   gain: number,
-  factor: number,
+  pace: EscapePace,
 ): 'progress' | 'regress' | 'free' {
   if (gain < 0) {
-    restraint.progress = Math.max(0, restraint.progress + gain);
+    const loss = pace === 'hard' ? 1 : -gain;
+    restraint.progress = Math.max(0, restraint.progress - loss);
     return 'regress';
   }
 
-  const amount = Math.max(1, Math.floor(gain * factor));
-  restraint.progress += amount;
+  let amount = gain;
+  if (pace === 'hard') amount = 1;
+  if (pace === 'easy') {
+    amount = Math.max(gain, Math.round(restraint.required * 0.5));
+  }
+
+  restraint.progress += Math.max(1, Math.floor(amount));
   if (restraint.progress >= restraint.required) {
     markReleased(restraint);
     return 'free';
@@ -399,7 +400,7 @@ export function applyEscapeAction(
   const restraint = state.restraints.find(
     (item) => item.id === input.restraintId,
   );
-  if (!restraint || !isReachable(state, restraint, isHelper)) {
+  if (!restraint || !isReachable(state, restraint)) {
     return fail('unreachable');
   }
 
@@ -437,36 +438,36 @@ export function applyEscapeAction(
     });
   }
 
-  const factor = progressFactor(state, restraint, isHelper);
+  const pace = escapePace(state, restraint, isHelper);
   let effect: 'progress' | 'regress' | 'free' | 'reset' = 'progress';
 
   switch (input.action) {
     case 'pick':
-      effect = addProgress(restraint, 25, factor);
+      effect = addProgress(restraint, 25, pace);
       break;
     case 'yank': {
       const chance = restraint.slippery ? 0.7 : 0.5;
-      effect = addProgress(restraint, rng() < chance ? 40 : -15, factor);
+      effect = addProgress(restraint, rng() < chance ? 40 : -15, pace);
       break;
     }
     case 'edge':
       restraint.edgeFound = true;
-      effect = addProgress(restraint, 15, factor);
+      effect = addProgress(restraint, 15, pace);
       break;
     case 'peel':
-      effect = addProgress(restraint, 25, factor);
+      effect = addProgress(restraint, 25, pace);
       break;
     case 'rip':
-      effect = addProgress(restraint, rng() < 0.5 ? 50 : -10, factor);
+      effect = addProgress(restraint, rng() < 0.5 ? 50 : -10, pace);
       break;
     case 'pry':
-      effect = addProgress(restraint, 30, factor);
+      effect = addProgress(restraint, 30, pace);
       break;
     case 'tug':
-      effect = addProgress(restraint, 20, factor);
+      effect = addProgress(restraint, 20, pace);
       break;
     case 'shim':
-      effect = addProgress(restraint, 20, factor);
+      effect = addProgress(restraint, 20, pace);
       break;
     case 'snap':
       if (rng() < 0.4) {
@@ -479,17 +480,17 @@ export function applyEscapeAction(
       }
       break;
     case 'rake':
-      effect = addProgress(restraint, inventory.pins > 0 ? 40 : 20, factor);
+      effect = addProgress(restraint, inventory.pins > 0 ? 40 : 20, pace);
       break;
     case 'lift':
-      effect = addProgress(restraint, 20, factor);
+      effect = addProgress(restraint, 20, pace);
       break;
     case 'heave':
-      effect = addProgress(restraint, 35, factor);
+      effect = addProgress(restraint, 35, pace);
       break;
     case 'tongue':
     case 'pull':
-      effect = addProgress(restraint, 35, factor);
+      effect = addProgress(restraint, 35, pace);
       break;
     case 'cut': {
       const items = inventoryOf(state, input.actorId);

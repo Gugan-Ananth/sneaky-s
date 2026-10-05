@@ -7,10 +7,7 @@ import {
   Message,
   ChannelType,
 } from 'discord.js';
-import {
-  createCustomSessionEmbed,
-  ESCAPE_HINT,
-} from 'src/helper/embed-builder';
+import { createCustomSessionEmbed } from 'src/helper/embed-builder';
 import { rejectForeignGuild } from 'src/helper/home-guild';
 import { BondageService } from './bondage.service';
 import {
@@ -62,7 +59,7 @@ export class BindCommand {
 
     if (this.pendingSetups.has(interaction.user.id)) {
       await interaction.followUp({
-        content: `You are already tied up! Try escaping first~\n${ESCAPE_HINT}`,
+        content: 'You are already tied up! Try escaping first~',
         ephemeral: true,
       });
       return;
@@ -89,7 +86,7 @@ export class BindCommand {
 
       if (existingSession) {
         await interaction.followUp({
-          content: `You are already tied up! Try escaping first~\n${ESCAPE_HINT}`,
+          content: 'You are already tied up! Try escaping first~',
           ephemeral: true,
         });
         return;
@@ -291,7 +288,7 @@ export class BindCommand {
     await member.roles.add('1497994703050903735');
 
     await channel.send(`Hello <@${interaction.user.id}>`);
-    await channel.send({ content: ESCAPE_HINT, embeds: [embed] });
+    await channel.send({ embeds: [embed] });
     await this.bondageService.postRestraintBoard(channel, session);
 
     if (isPrivateCage && friendIds.length > 0) {

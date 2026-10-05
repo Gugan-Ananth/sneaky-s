@@ -3,7 +3,7 @@ import { SlashCommandPipe } from '@discord-nestjs/common';
 import { Injectable, PipeTransform, Type } from 'node_modules/@nestjs/common';
 import { SettingsDto } from './dto/settings.dto';
 import { ChatInputCommandInteraction } from 'discord.js';
-import { createProfileEmbed, ESCAPE_HINT } from 'src/helper/embed-builder';
+import { createProfileEmbed } from 'src/helper/embed-builder';
 import { rejectForeignGuild } from 'src/helper/home-guild';
 import { UserService } from './user.service';
 
@@ -32,7 +32,7 @@ export class UserSettingsCommand {
         safeword: options.safeword,
       });
       const embed = createProfileEmbed(savedSettings);
-      await interaction.followUp({ content: ESCAPE_HINT, embeds: [embed] });
+      await interaction.followUp({ embeds: [embed] });
     } catch (error) {
       console.log(error);
       await interaction.followUp({
