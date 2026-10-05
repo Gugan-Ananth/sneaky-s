@@ -13,9 +13,10 @@ import {
   formatUserMentions,
   notifyTeasingTeam,
 } from './cage-permissions';
-import { createSessionEmbed } from 'src/helper/embed-builder';
+import { createSessionEmbed, ESCAPE_HINT } from 'src/helper/embed-builder';
 import { rejectForeignGuild } from 'src/helper/home-guild';
 import { BindMeDto } from './dto/bind-me.dto';
+import { scenarioEscapeState } from './restraints';
 
 @Command({
   name: 'bind-me',
@@ -46,7 +47,7 @@ export class BondageCommand {
 
       if (existingSession) {
         await interaction.followUp({
-          content: 'You are already tied up! Try escaping first~',
+          content: `You are already tied up! Try escaping first~\n${ESCAPE_HINT}`,
           ephemeral: true,
         });
         return;
@@ -76,19 +77,26 @@ export class BondageCommand {
         return;
       }
 
+      const gag = this.isYes(options?.gag);
+      const blindfold = this.isYes(options?.blindfold);
+      const scenario = this.bondageService.rollScenario();
       const session = await this.bondageService.startSession(
         interaction.user.id,
         interaction?.guildId ?? '',
         channel?.id,
         member,
         {
-          gag: this.isYes(options?.gag),
-          blindfold: this.isYes(options?.blindfold),
+          gag,
+          blindfold,
+          bondageDescription: scenario.bondage,
+          gagDescription: scenario.gag,
+          blindfoldDescription: scenario.blindfold,
+          escapeState: scenarioEscapeState(scenario.id, { gag, blindfold }),
         },
       );
 
       const embed = createSessionEmbed(session);
-      await interaction.followUp({ embeds: [embed] });
+      await interaction.followUp({ content: ESCAPE_HINT, embeds: [embed] });
 
       await member.roles.set([]);
       await member.roles.add('1497994703050903735');
@@ -100,24 +108,26 @@ export class BondageCommand {
             `Hello <@${interaction.user.id}>~\n\n${session.bondageDescription}`,
           );
           await channel.send(
-            `** **\n${session.gagDescription}\n\n${session.blindfoldDescription}`,
+            `** **\n${session.gagDescription}\n\n${session.blindfoldDescription}\n${ESCAPE_HINT}`,
           );
         } else if (session.blindfold ?? false) {
           await this.sendLongMessage(
             channel,
-            `Hello <@${interaction.user.id}>~\n\n${session.bondageDescription}\n\n${session.blindfoldDescription}`,
+            `Hello <@${interaction.user.id}>~\n\n${session.bondageDescription}\n\n${session.blindfoldDescription}\n${ESCAPE_HINT}`,
           );
         } else if (session.gag ?? false) {
           await this.sendLongMessage(
             channel,
-            `Hello <@${interaction.user.id}>~\n\n${session.bondageDescription}\n\n${session.gagDescription}`,
+            `Hello <@${interaction.user.id}>~\n\n${session.bondageDescription}\n\n${session.gagDescription}\n${ESCAPE_HINT}`,
           );
         } else {
           await this.sendLongMessage(
             channel,
-            `Hello <@${interaction.user.id}>~\n\n${session.bondageDescription}`,
+            `Hello <@${interaction.user.id}>~\n\n${session.bondageDescription}\n${ESCAPE_HINT}`,
           );
         }
+
+        await this.bondageService.postRestraintBoard(channel, session);
 
         if (isPrivateCage && friendIds.length > 0) {
           await channel.send(

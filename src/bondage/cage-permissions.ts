@@ -18,6 +18,7 @@ const BOUND_USER_PERMISSIONS = [
 const VISITOR_PERMISSIONS = [
   PermissionFlagsBits.ViewChannel,
   PermissionFlagsBits.SendMessages,
+  PermissionFlagsBits.UseApplicationCommands,
 ];
 
 export function buildCagePermissionOverwrites(

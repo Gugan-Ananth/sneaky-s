@@ -5,9 +5,9 @@ import { UserSettings } from 'src/user/user-settings.entity';
 import { BondageService } from './bondage.service';
 import { BondageCommand } from './bondage.command';
 import { SafewordCommand } from './safeword.command';
-import { ReleaseCronService } from './release.service';
 import { SharedDiscordModule } from 'src/helper/shared-discord.module';
 import { BindCommand } from './bind.command';
+import { EscapeCommand } from './escape.command';
 
 @Module({
   imports: [
@@ -16,10 +16,10 @@ import { BindCommand } from './bind.command';
   ],
   providers: [
     BondageService,
-    ReleaseCronService,
     BondageCommand,
     BindCommand,
     SafewordCommand,
+    EscapeCommand,
   ],
   exports: [BondageService],
 })

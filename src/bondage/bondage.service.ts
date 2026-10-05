@@ -10,22 +10,38 @@ import {
   Guild,
   GuildMember,
   OverwriteType,
+  TextBasedChannel,
 } from 'discord.js';
 import { BondageScenario } from './bondage-scenarios';
 import { InjectDiscordClient } from '@discord-nestjs/core';
 import { formatUserMentions, isPrivateCageChannel } from './cage-permissions';
+import {
+  createRestraintBoardEmbed,
+  ESCAPE_HINT,
+} from 'src/helper/embed-builder';
+import {
+  applyEscapeAction,
+  EscapeAction,
+  EscapeResult,
+  EscapeState,
+  searchRoom,
+} from './escape-rules';
 
 const CAGE_ROLE_ID = '1497994703050903735';
 
 type StartSessionOptions = {
   bondageDescription?: string;
+  gagDescription?: string;
+  blindfoldDescription?: string;
   gag?: boolean;
   blindfold?: boolean;
+  escapeState: EscapeState;
 };
 
 @Injectable()
 export class BondageService {
   private readonly logger = new Logger(BondageService.name);
+  private readonly escapeQueues = new Map<string, Promise<void>>();
 
   constructor(
     @InjectRepository(ActiveSession)
@@ -41,7 +57,7 @@ export class BondageService {
     guildId: string,
     channelId: string,
     member: GuildMember,
-    options: StartSessionOptions = {},
+    options: StartSessionOptions,
   ) {
     let settings = await this.userSettingsRepository.findOne({
       where: { userId },
@@ -50,12 +66,15 @@ export class BondageService {
     if (!settings) {
       settings = this.userSettingsRepository.create({
         userId,
-        defaultDuration: 30,
         safeword: 'red',
       });
       await this.userSettingsRepository.save(settings);
     }
-    const scenarioDescription = this.getRandomScenario();
+    const needsFallback =
+      options.bondageDescription === undefined ||
+      options.gagDescription === undefined ||
+      options.blindfoldDescription === undefined;
+    const fallback = needsFallback ? this.rollScenario() : undefined;
     const originalRoles = member.roles.cache.map((role) => role.id);
     const session = this.activeSessionRepository.create({
       userId,
@@ -63,18 +82,17 @@ export class BondageService {
       channelId,
       originalRoles,
       startTime: new Date(),
-      endTime: new Date(
-        Date.now() + (settings?.defaultDuration ?? 30) * 60 * 1000,
-      ),
-      bondageDescription:
-        options.bondageDescription ?? `${scenarioDescription.bondage}`,
-      gagDescription: `${scenarioDescription.gag}`,
-      blindfoldDescription: `${scenarioDescription.blindfold}`,
+      endTime: null,
+      bondageDescription: options.bondageDescription ?? fallback?.bondage ?? '',
+      gagDescription: options.gagDescription ?? fallback?.gag ?? '',
+      blindfoldDescription:
+        options.blindfoldDescription ?? fallback?.blindfold ?? '',
       gag: options.gag ?? false,
       blindfold: options.blindfold ?? false,
-      duration: settings.defaultDuration ?? 30,
+      duration: null,
       safeword: settings.safeword ?? 'red',
       status: 'active',
+      escapeState: options.escapeState,
     });
 
     return this.activeSessionRepository.save(session);
@@ -279,6 +297,7 @@ export class BondageService {
         await channel.permissionOverwrites.edit(friendId, {
           ViewChannel: true,
           SendMessages: true,
+          UseApplicationCommands: true,
         });
       }
 
@@ -322,7 +341,157 @@ export class BondageService {
     }
   }
 
-  private getRandomScenario(): BondageScenario {
+  rollScenario(): BondageScenario {
     return scenarios[Math.floor(Math.random() * scenarios.length)];
+  }
+
+  async releaseSessionsWithoutEscape(): Promise<void> {
+    const sessions = await this.activeSessionRepository.find({
+      where: { status: 'active' },
+    });
+
+    for (const session of sessions) {
+      if (session.escapeState) continue;
+      this.logger.warn(
+        `Releasing ${session.userId} from a session that has no escape`,
+      );
+      try {
+        await this.endSession(session);
+      } catch (error) {
+        this.logger.error(
+          `Failed to release legacy session ${session.userId}`,
+          error instanceof Error ? error.stack : String(error),
+        );
+      }
+    }
+  }
+
+  async performEscape(
+    captiveId: string,
+    actorId: string,
+    request:
+      | { type: 'action'; restraintId: string; action: EscapeAction }
+      | { type: 'search' },
+  ): Promise<EscapeResult> {
+    return this.enqueue(captiveId, async () => {
+      const session = await this.getActiveSession(captiveId);
+      if (!session?.escapeState) {
+        return { ok: false, reason: 'unreachable' };
+      }
+
+      const blindfolded = session.blindfold ?? false;
+      const now = Date.now();
+      const result =
+        request.type === 'search'
+          ? searchRoom(session.escapeState, {
+              actorId,
+              captiveId,
+              blindfolded,
+              now,
+            })
+          : applyEscapeAction(session.escapeState, {
+              actorId,
+              captiveId,
+              restraintId: request.restraintId,
+              action: request.action,
+              blindfolded,
+              now,
+            });
+
+      if (!result.ok) {
+        return { ...result, state: session.escapeState };
+      }
+
+      session.escapeState = result.state;
+      session.gag = result.gag;
+      session.blindfold = result.blindfold;
+      await this.activeSessionRepository.save(session);
+      return result;
+    });
+  }
+
+  async postRestraintBoard(
+    channel: TextBasedChannel,
+    session: ActiveSession,
+  ): Promise<void> {
+    if (!session.escapeState || channel.isDMBased()) return;
+
+    const message = await channel.send({
+      content: ESCAPE_HINT,
+      embeds: [createRestraintBoardEmbed(session)],
+    });
+    session.escapeState = {
+      ...session.escapeState,
+      boardMessageId: message.id,
+    };
+    await this.activeSessionRepository.save(session);
+  }
+
+  async updateRestraintBoard(userId: string): Promise<void> {
+    const session = await this.getActiveSession(userId);
+    if (!session?.channelId || !session.escapeState) return;
+
+    try {
+      const channel = await this.client.channels.fetch(session.channelId);
+      if (!channel?.isTextBased() || channel.isDMBased()) return;
+
+      const board = {
+        content: ESCAPE_HINT,
+        embeds: [createRestraintBoardEmbed(session)],
+      };
+      const boardId = session.escapeState.boardMessageId;
+      if (boardId) {
+        try {
+          const message = await channel.messages.fetch(boardId);
+          await message.edit(board);
+          return;
+        } catch (error) {
+          this.logger.warn(
+            `Restraint board ${boardId} could not be edited: ${this.errorMessage(error)}`,
+          );
+        }
+      }
+
+      const message = await channel.send(board);
+      session.escapeState = {
+        ...session.escapeState,
+        boardMessageId: message.id,
+      };
+      await this.activeSessionRepository.save(session);
+    } catch (error) {
+      this.logger.warn(
+        `Failed to update restraint board for ${userId}: ${this.errorMessage(error)}`,
+      );
+    }
+  }
+
+  async announce(channelId: string, content: string): Promise<void> {
+    if (!content) return;
+
+    try {
+      const channel = await this.client.channels.fetch(channelId);
+      if (!channel?.isTextBased() || channel.isDMBased()) return;
+      await channel.send({
+        content,
+        allowedMentions: { parse: [] },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Failed to announce in ${channelId}: ${this.errorMessage(error)}`,
+      );
+    }
+  }
+
+  private enqueue<T>(userId: string, job: () => Promise<T>): Promise<T> {
+    const previous = this.escapeQueues.get(userId) ?? Promise.resolve();
+    const run = previous.then(job, job);
+    this.escapeQueues.set(
+      userId,
+      run.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    return run;
   }
 }

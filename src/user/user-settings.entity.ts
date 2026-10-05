@@ -5,9 +5,6 @@ export class UserSettings {
   @PrimaryColumn()
   userId?: string;
 
-  @Column({ type: 'int', default: 30 })
-  defaultDuration?: number;
-
   @Column({ nullable: true })
   safeword?: string;
 

@@ -127,7 +127,6 @@ export class UserService {
 
     return this.userSettingsRepository.create({
       userId,
-      defaultDuration: 30,
       safeword: 'red',
       friendIds: [],
     });

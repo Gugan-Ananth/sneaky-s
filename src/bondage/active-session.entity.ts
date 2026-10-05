@@ -1,4 +1,5 @@
 import { Entity, Column, PrimaryGeneratedColumn } from 'typeorm';
+import { EscapeState } from './escape-rules';
 
 @Entity('active_sessions')
 export class ActiveSession {
@@ -29,8 +30,8 @@ export class ActiveSession {
   @Column()
   startTime?: Date;
 
-  @Column()
-  endTime?: Date;
+  @Column({ type: 'timestamp', nullable: true })
+  endTime?: Date | null;
 
   @Column({ default: false })
   gag?: boolean;
@@ -41,9 +42,12 @@ export class ActiveSession {
   @Column({ nullable: true })
   safeword?: string;
 
-  @Column({ nullable: true })
-  duration?: number;
+  @Column({ type: 'int', nullable: true })
+  duration?: number | null;
 
   @Column({ default: 'active' })
   status?: string;
+
+  @Column({ type: 'jsonb', nullable: true })
+  escapeState?: EscapeState | null;
 }

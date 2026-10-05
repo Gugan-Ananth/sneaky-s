@@ -34,6 +34,7 @@ export class BotGateway {
   @Once('clientReady')
   async onReady() {
     this.logger.log(`Bot ${this.client.user?.tag} was started!`);
+    await this.bondageService.releaseSessionsWithoutEscape();
     await this.restrictToHomeGuild();
     await this.registerHomeGuildCommands();
     setTimeout(() => {
